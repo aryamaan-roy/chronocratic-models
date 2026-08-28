@@ -139,68 +139,50 @@ class MHCCL(pl.LightningModule, BasicEncodingMixin):
     divergences from it:
 
     - **Clustering runs per batch over a momentum feature bank.** The reference
-      clusters the whole training set once per epoch and maps assignments back
-      through a dataset-global sample index supplied by its own ``Dataset``.
-      This library's batch contract carries no such index. FINCH therefore runs
-      on the current batch's ``(3B, D)`` stack of raw and augmented embeddings —
-      the same stacking, and the first ``B`` rows are exactly what the
-      reference's index addresses — unioned with a FIFO of recent momentum
-      embeddings. The bank restores the sample count FINCH needs to build more
-      than two partitions; the reference's own queue exists but is commented
-      out. Prototypes are consequently re-derived every step rather than fixed
-      per epoch.
-    - **The bank never spans more than one epoch.** Rows enqueued per epoch are
-      counted and cap the bank, so ``feature_bank_size`` acts as a ceiling and
-      the data sets the size below it. Without the cap, a small dataset fills
-      the bank with copies of the same samples drawn from many encoder states,
-      and prototypes become time-averages of the encoder's trajectory while the
-      query comes from its current state.
-    - **The realized hierarchy depth is reported, not assumed.**
-      ``min(hierarchy_levels, levels - 1)`` partitions are used — each needs the
-      partition above it for downward masking — logged as
+      clusters the training set once per epoch and addresses the result through
+      a dataset-global sample index this library's batch contract does not
+      carry. FINCH runs instead on the batch's ``(3B, D)`` stack of raw and
+      augmented embeddings — the same stacking, and the leading ``B`` rows are
+      the anchors — unioned with a FIFO of recent momentum embeddings that
+      restores the sample count a multi-level hierarchy needs. Prototypes are
+      therefore re-derived every step rather than fixed per epoch.
+    - **The feature bank is capped at one epoch of rows.** ``feature_bank_size``
+      is a ceiling; the data sets the size below it. Retaining more would fill
+      the pool with copies of the same samples from different encoder states.
+    - **The realized hierarchy depth is reported, not assumed.** Each contrasted
+      partition needs the one above it for downward masking, so
+      ``min(hierarchy_levels, levels - 1)`` are used, logged as
       ``mhccl/hierarchy_levels_used``, and a shortfall warns once. The
-      cluster-level term averages over the levels actually used, where the
-      reference divides by the configured count unconditionally, which would
-      couple the objective's scale to the batch's geometry.
+      cluster-level term averages over the levels used; the reference divides by
+      the configured count, which ties the loss scale to the batch's geometry.
     - **Logits are inner products.** The reference reshapes its ``(B, M, D)``
-      candidate stack to ``(B, D, M)`` where the comment two lines above asks
-      for a transpose. ``torch.reshape`` reinterprets the buffer rather than
-      permuting axes, so its einsum contracts mismatched elements and the
-      published logits are not inner products between the anchor and its
-      candidates. Computed here with ``einsum("bd,bmd->bm", ...)``.
+      candidate stack to ``(B, D, M)`` where the comment above the line asks for
+      a transpose, so its einsum contracts mismatched elements. Computed here
+      with ``einsum("bd,bmd->bm", ...)``.
     - **Negatives are everything outside the anchor's cluster.** The reference
-      excludes only the positives it happened to sample, so a cluster larger
-      than ``positive_instance_count`` leaves its unsampled members available as
-      negatives of an anchor they share a cluster with — the fake negatives the
-      model exists to remove.
-    - **Shortfalls are masked, not raised.** The reference calls
-      ``random.sample`` for a fixed count and raises whenever a batch holds
-      fewer candidates. Slots that cannot be filled are marked invalid and left
-      out of the mean, which equals ``reduction="mean"`` whenever nothing is
-      clamped.
-    - **No shuffle-BN and no ``torch.distributed``.** The reference's
-      ``forward`` calls ``_batch_shuffle_ddp``, so it requires an initialized
-      process group and both of its non-distributed branches raise
-      ``NotImplementedError``. Batch shuffling is the identity at world size 1
-      and is unnecessary under the ``GroupNorm`` default, which computes no
-      batch statistics.
-    - **Centroids are computed without mutating the feature matrix**, and with
-      true per-cluster counts. See
+      excludes only the positives it sampled, leaving a large cluster's
+      unsampled members as negatives of an anchor they share a cluster with.
+    - **Shortfalls are masked, not raised.** The reference draws a fixed count
+      and raises when a batch holds fewer candidates. Unfillable slots are
+      excluded from the mean, which equals ``reduction="mean"`` when none are.
+    - **No shuffle-BN and no ``torch.distributed``.** Batch shuffling is the
+      identity at world size 1 and unnecessary under the ``GroupNorm`` default,
+      which computes no batch statistics.
+    - **Centroids never mutate the feature matrix** and divide by true
+      per-cluster counts. See
       :mod:`~chronocratic.models.convolutional.standard.mhccl.clustering`.
     - **1-D convolutions.** The reference applies a torchvision ResNet-18 as
       ``Conv2d`` over an input unsqueezed to ``(B, C, T, 1)``, where the outer
-      kernel columns only ever multiply zero padding. Numerically identical;
-      see :class:`Conv1dResNetEncoder`.
+      kernel columns only multiply zero padding. Numerically identical; see
+      :class:`Conv1dResNetEncoder`.
     - **Normalization defaults to ``GroupNorm(1, C)``** rather than the
-      reference's hardcoded ``BatchNorm``, so the encoder stays well-defined at
+      reference's ``BatchNorm``, so the encoder stays well-defined at
       ``batch_size=1``. ``normalization_layer_type=BATCH`` restores it.
     - **Views come from the injected producer, per batch.** The reference
-      computes both views once, offline, at ``Dataset`` construction and freezes
-      them for the whole run, and never seeds ``np.random``, so they are not
-      reproducible across runs.
+      freezes both views at ``Dataset`` construction and never seeds
+      ``np.random``, so they are not reproducible across runs.
     - **Defaults follow the README's published command** where it and the CLI
-      disagree — ``use_projection_mlp`` and ``use_lr_scheduler`` — since that is
-      the only complete configuration the authors give.
+      disagree — ``use_projection_mlp`` and ``use_lr_scheduler``.
 
     Args:
         input_dim: Number of input features (channels) in the time series.
@@ -487,6 +469,11 @@ class MHCCL(pl.LightningModule, BasicEncodingMixin):
             return self.feature_bank.new_zeros((0, self._projection_dim))
         # An epoch enqueues three rows per sample, so retaining more than that
         # means retaining copies of the same samples from older encoder states.
+        # Those copies do not merely waste the pool: each sample's copies cluster
+        # together at the finest partition and add a level encoding duplication
+        # rather than structure, so an uncapped bank can look like a deeper
+        # hierarchy while carrying less information. Pinned in
+        # ``tests/unit/test_mhccl.py::test_duplicate_rows_manufacture_spurious_depth``.
         cap = int(self.rows_last_epoch)
         retained = min(fill, cap) if cap > 0 else fill
         offsets = torch.arange(retained, device=self.feature_bank.device)
