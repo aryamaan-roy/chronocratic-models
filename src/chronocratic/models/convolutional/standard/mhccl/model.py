@@ -41,23 +41,21 @@ _VIEWS_PER_SAMPLE = 3
 # Multiplier on the step-decay branch of the learning-rate schedule.
 _LR_STEP_GAMMA = 0.1
 
-# Module-level dedup so a shallow hierarchy warns once per process rather than
-# once per training step. Mirrors ``utils/helpers.py``.
-_warned_shallow_hierarchy = False
+# Once-per-class dedup so a shallow hierarchy warns once rather than once per
+# training step, mirroring the tracker in ``utils/helpers.py``.
+_warned_shallow_hierarchy: set[str] = set()
 
 
 def _reset_hierarchy_warning() -> None:
-    """Clear the once-per-process shallow-hierarchy warning, for test isolation."""
-    global _warned_shallow_hierarchy  # noqa: PLW0603
-    _warned_shallow_hierarchy = False
+    """Clear the once-per-class shallow-hierarchy warning, for test isolation."""
+    _warned_shallow_hierarchy.clear()
 
 
-def _warn_shallow_hierarchy(*, requested: int, available: int, pool_size: int) -> None:
-    """Warn once that the clustering realized fewer partitions than requested."""
-    global _warned_shallow_hierarchy  # noqa: PLW0603
-    if _warned_shallow_hierarchy:
+def _warn_shallow_hierarchy(cls: type, *, requested: int, available: int, pool_size: int) -> None:
+    """Warn once per model class that the clustering realized fewer partitions."""
+    if cls.__name__ in _warned_shallow_hierarchy:
         return
-    _warned_shallow_hierarchy = True
+    _warned_shallow_hierarchy.add(cls.__name__)
     warnings.warn(
         f"MHCCL requested {requested} hierarchy levels but the clustering realized "
         f"{available} usable ones over a pool of {pool_size} rows. Cluster-level contrast "
@@ -256,13 +254,12 @@ class MHCCL(pl.LightningModule, BasicEncodingMixin):
         {EncodingOutputShape.VECTOR, EncodingOutputShape.SEQUENCE}
     )
 
+    # PLR0915: this model carries roughly twice the hyperparameters of the next
+    # largest one here, and the library requires each to be stored explicitly as
+    # ``self._{name}``. That mandate and the statement-count limit cannot both
+    # hold. ``PLR0913`` is already ignored project-wide for the same reason on
+    # the signature side.
     def __init__(  # noqa: PLR0915
-        # MHCCL carries roughly twice the hyperparameters of the next largest
-        # model here — a momentum branch, a clustering hierarchy, and two
-        # masking strategies on top of an encoder — and this library requires
-        # each to be stored explicitly as ``self._{name}``. That mandate and the
-        # statement-count limit cannot both hold; ``PLR0913`` is already ignored
-        # project-wide for the same reason on the signature side.
         self,
         *,
         input_dim: int,
@@ -605,7 +602,7 @@ class MHCCL(pl.LightningModule, BasicEncodingMixin):
         # nothing about the configuration.
         if usable < self._hierarchy_levels and int(self.rows_last_epoch) > 0:
             _warn_shallow_hierarchy(
-                requested=self._hierarchy_levels, available=usable, pool_size=pool_size
+                type(self), requested=self._hierarchy_levels, available=usable, pool_size=pool_size
             )
         if usable == 0 and not self._use_instance_loss:
             msg = (
