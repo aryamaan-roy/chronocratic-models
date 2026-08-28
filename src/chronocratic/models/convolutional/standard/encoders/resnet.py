@@ -1,16 +1,16 @@
-"""ResNet-style Conv1D encoder backbone for SimCLR.
+"""ResNet-style Conv1D encoder backbone, shared by SimCLR and MHCCL.
 
 Stacks the residual blocks from
-:mod:`~chronocratic.models.convolutional.standard.simclr.layers` into strided
+:mod:`~chronocratic.models.convolutional.standard.layers.residual` into strided
 stages and returns the resulting feature map ``(B, representation_dim, T')``.
 
-The encoder deliberately does not pool over time. Reducing the temporal axis
-is the caller's decision, because SimCLR's two callers need different answers:
-the contrastive loss needs the temporal axis preserved (pooling it away leaves
-NT-Xent with no angular diversity and pins the loss at ``log(K)``), while
-``encode()`` needs a fixed-width vector for downstream probes. See
-:meth:`~chronocratic.models.convolutional.standard.simclr.model.SimCLR._encode_batch`,
-which owns that reduction.
+The encoder deliberately does not pool over time. Reducing the temporal axis is
+the caller's decision, and its callers need different answers: SimCLR's
+contrastive loss needs the axis preserved (pooling it away leaves NT-Xent with
+no angular diversity and pins the loss at ``log(K)``), MHCCL's loss requires a
+fixed-width vector because cluster centroids must be comparable across lengths,
+and ``encode()`` needs a fixed-width vector for downstream probes. See each
+model's ``_encode_batch``, which owns that reduction.
 
 See :class:`Conv1dResNetEncoder` for the deliberate divergences from the
 reference.
@@ -23,7 +23,7 @@ __all__ = ["Conv1dResNetEncoder"]
 import torch
 from torch import nn
 
-from chronocratic.models.convolutional.standard.simclr.layers import (
+from chronocratic.models.convolutional.standard.layers.residual import (
     _norm_layer,
     Conv1dBasicBlock,
     Conv1dBottleneckBlock,
