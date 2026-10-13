@@ -705,3 +705,35 @@ Current divergences and known limits:
 - **TST, open limit** — encoding at full-partition lengths is length-*correct* but O(T²) in memory and will exhaust it before raising. Chunked windowing is an open follow-up.
 - **`process_sample_length`, open limit** — uses `np.random.default_rng()` per call, so it is not controlled by `lightning.seed_everything` and training crops are not reproducible across runs. Shared by TS2Vec, CoST, AutoTCL, TST, and TimeVAE.
 - **Pretrain/encode length mismatch, open question** — a model pretrained on crops of one length and used to encode windows of another is mechanically valid after patching, but whether representation quality holds across lengths is empirical. Worth measuring before publishing numbers.
+
+## Pipeline Tests and Adding a Model
+
+`tests/pipeline/` trains every model end to end on structured synthetic data
+(`LightningDataModule` + `Trainer.fit`) and checks that it learns: the loss
+drops, gradients reach every trainable parameter group, and a linear probe on
+`encode()` features (or reconstruction / accuracy for generative / supervised
+models) beats chance.
+
+They are a canary, not a benchmark: the thresholds in
+`tests/pipeline/test_pipeline.py` are loose, shared by every model, and catch a
+model that does not learn at all (flat loss, dead gradients, collapsed
+features), not one that learns slowly.
+
+These tests are slower than unit tests. Skip them for a quick run:
+
+```bash
+uv run pytest --skip-pipeline        # or: SKIP_PIPELINE_TESTS=1 uv run pytest
+```
+
+CI and a plain `uv run pytest` run them.
+
+**A new model cannot merge without a pipeline spec.** Add a `ModelSpec` to
+`tests/pipeline/specs.py` (builder with a small config, a datamodule factory,
+the task type). `tests/pipeline/test_completeness.py` fails if an exported
+`LightningModule` has no spec, even when `--skip-pipeline` is set.
+
+A spec may only change `epochs` and its datamodule (e.g. a shorter
+`seq_len`). Each override gets a comment with the measured reason, over several
+seeds (e.g. the epoch at which the model leaves a loss plateau). Never tune the shared
+thresholds for one model. If a model genuinely fails a check, mark its spec with
+a strict `xfail` that names a tracking issue.

@@ -8,6 +8,8 @@ import pytest
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
+from tests.pipeline.flag import apply_skip_pipeline
+
 # --------------------------------------------------------------------------- #
 # Shared training helper
 # --------------------------------------------------------------------------- #
@@ -130,3 +132,33 @@ def finite_losses() -> Callable[..., None]:
         finite_losses(losses, expected_min=5)
     """
     return assert_finite_losses
+
+
+# Lightning/torch environment notices: tests pin CPU and tiny in-process loaders on purpose.
+_IGNORED_WARNINGS = (
+    "ignore:GPU available but not used:UserWarning",
+    "ignore:.*does not have many workers which may be a bottleneck",
+    r"ignore:`isinstance\(treespec, LeafSpec\)` is deprecated",
+    "ignore:'pin_memory' argument is set as true but:UserWarning",
+)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Silence environment warnings that say nothing about the code under test."""
+    for warning_filter in _IGNORED_WARNINGS:
+        config.addinivalue_line("filterwarnings", warning_filter)
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register the ``--skip-pipeline`` option."""
+    parser.addoption(
+        "--skip-pipeline",
+        action="store_true",
+        default=False,
+        help="Skip slow end-to-end pipeline learning tests (also: SKIP_PIPELINE_TESTS=1).",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip ``pipeline``-marked tests when the flag or env var is set."""
+    apply_skip_pipeline(config=config, items=items)
