@@ -13,13 +13,13 @@ from chronocratic.models.convolutional.standard.encoders.resnet import Conv1dRes
 from chronocratic.models.convolutional.standard.mhccl.augmentations import _default_mhccl_pair
 from chronocratic.models.convolutional.standard.mhccl.clustering import finch
 from chronocratic.models.convolutional.standard.mhccl.config import _MIN_SINGLETON_SPLIT_COUNT
+from chronocratic.models.convolutional.standard.mhccl.enums import OutlierMaskMode
 from chronocratic.models.convolutional.standard.mhccl.losses import (
     instance_contrast_terms,
     masked_bce_with_logits,
     prototype_contrast_terms,
 )
 from chronocratic.models.enums.blocks import ResidualBlockType
-from chronocratic.models.enums.clustering import OutlierMaskMode
 from chronocratic.models.enums.encoding import EncodingOutputShape
 from chronocratic.models.enums.layers import NormalizationLayerType
 from chronocratic.models.utils import (

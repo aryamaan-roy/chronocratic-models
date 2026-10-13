@@ -91,6 +91,10 @@ prototypes, with upward and downward masking shaping the pairs.
 .. automodule:: chronocratic.models.convolutional.standard.mhccl.losses
    :members:
    :show-inheritance:
+
+.. automodule:: chronocratic.models.convolutional.standard.mhccl.enums
+   :members:
+   :show-inheritance:
 ```
 
 ### Parameter names vs. the reference

@@ -39,6 +39,7 @@ from chronocratic.models.convolutional.standard.mhccl.clustering import (
     finch,
 )
 from chronocratic.models.convolutional.standard.mhccl.config import MHCCLModelParameters
+from chronocratic.models.convolutional.standard.mhccl.enums import OutlierMaskMode
 from chronocratic.models.convolutional.standard.mhccl.losses import (
     _sample_from_mask,
     instance_contrast_terms,
@@ -47,7 +48,6 @@ from chronocratic.models.convolutional.standard.mhccl.losses import (
 )
 from chronocratic.models.convolutional.standard.mhccl.model import _reset_hierarchy_warning, MHCCL
 from chronocratic.models.enums.blocks import ResidualBlockType
-from chronocratic.models.enums.clustering import OutlierMaskMode
 from chronocratic.models.enums.encoding import EncodingOutputShape
 from chronocratic.models.enums.layers import NormalizationLayerType
 from chronocratic.models.protocols import HasEncoder

@@ -39,7 +39,7 @@ from dataclasses import dataclass
 
 import torch
 
-from chronocratic.models.enums.clustering import OutlierMaskMode
+from chronocratic.models.convolutional.standard.mhccl.enums import OutlierMaskMode
 
 # Two points can only ever merge into one cluster, so a level with fewer than
 # three points cannot produce a coarser non-degenerate partition.

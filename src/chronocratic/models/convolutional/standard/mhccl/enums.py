@@ -1,8 +1,9 @@
-"""Outlier masking mode enum.
+"""MHCCL-specific enums.
 
-Selects which members a cluster drops before its centroid is recomputed, in
-hierarchical-clustering models that refine prototypes bottom-up. Distinct from
-:class:`~chronocratic.models.convolutional.dilated.encoders.masking.MaskMode`,
+``OutlierMaskMode`` selects which members a cluster drops before its centroid
+is recomputed in
+:mod:`~chronocratic.models.convolutional.standard.mhccl.clustering`. Distinct
+from :class:`~chronocratic.models.convolutional.dilated.encoders.masking.MaskMode`,
 which masks input timesteps rather than cluster members.
 
 Mapping to behaviour
@@ -18,6 +19,8 @@ which is why the centroid computation excludes rather than deletes.
 from __future__ import annotations
 
 from enum import StrEnum
+
+__all__ = ["OutlierMaskMode"]
 
 
 class OutlierMaskMode(StrEnum):

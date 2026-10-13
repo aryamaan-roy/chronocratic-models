@@ -10,8 +10,8 @@ __all__ = ["MHCCLModelParameters"]
 from dataclasses import dataclass
 
 from chronocratic.models.augmentation.base import AugmentationProducer, ViewPair
+from chronocratic.models.convolutional.standard.mhccl.enums import OutlierMaskMode
 from chronocratic.models.enums.blocks import ResidualBlockType
-from chronocratic.models.enums.clustering import OutlierMaskMode
 from chronocratic.models.enums.layers import NormalizationLayerType
 
 # Two windows is the smallest split that yields a non-degenerate batch
