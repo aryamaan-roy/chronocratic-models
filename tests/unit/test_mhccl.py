@@ -639,9 +639,9 @@ class TestDownwardMasking:
     def test_instance_negatives_exclude_the_whole_cluster(self) -> None:
         """A same-cluster instance is never a negative, sampled or not.
 
-        The reference excludes only the positives it drew, leaving unsampled
-        cluster members available as negatives of an anchor they share a cluster
-        with — the fake negatives the model exists to remove.
+        Matches the reference, which subtracts the whole cluster from the batch
+        before it subsamples the positives, so a member it did not draw as a
+        positive cannot reappear as a negative.
         """
         assignment = torch.zeros(5, dtype=torch.long)  # one cluster: no negatives exist
         query = torch.nn.functional.normalize(torch.randn(5, 8), dim=1)

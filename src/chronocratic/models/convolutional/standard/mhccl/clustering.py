@@ -13,13 +13,22 @@ Everything here runs in torch on the input's device. The reference reaches for
 host round-trip per level would dominate a per-batch clustering step. The
 component labelling is verified equal to SciPy's in ``tests/unit/test_mhccl.py``.
 
-Divergences from the reference, each commented at its line: centroids are
-computed without mutating the caller's feature matrix and with true per-cluster
-counts; the level-to-level cluster map is returned rather than re-derived by
-searching the label matrix; and the reference's ``min_sim`` edge pruning is
-omitted because it is a no-op there (it zeroes stored entries of a
-``csr_matrix``, which ``csgraph`` ignores, since those routines read only the
-sparsity structure).
+Five divergences from the reference. The first four are marked ``DIVERGENCE``
+at the line where each happens:
+
+1. Self-distances are infinite rather than ``1e12`` (``_one_nn_neighbors``).
+2. Centroids are computed without mutating the caller's feature matrix and
+   divide by true per-cluster counts (``_cluster_means``).
+3. Outlier masking reads each level's own cluster membership, where the
+   reference reuses level 0's member lists at every coarser level
+   (``_outlier_mask``).
+4. The level-to-level cluster map is kept from the merge step rather than
+   re-derived by scanning the label matrix (``finch``).
+
+The fifth has no line to mark, being an omission: the reference's ``min_sim``
+edge pruning is left out because it is a no-op there. It zeroes stored entries
+of a ``csr_matrix``, and ``csgraph`` ignores that — those routines read only the
+sparsity structure, which an explicit zero does not change.
 """
 
 from __future__ import annotations
@@ -78,8 +87,10 @@ def _one_nn_neighbors(features: torch.Tensor) -> torch.Tensor:
         neighbour, excluding ``i`` itself.
     """
     distances = torch.cdist(features, features)
-    # The reference fills the diagonal with 1e12, which is only "large enough"
-    # for its normalized features; infinity is unconditional.
+    # DIVERGENCE: the self-distance is set to infinity, so a point can never be
+    # its own nearest neighbour. The reference uses 1e12, which is only large
+    # enough because its features are unit-norm; infinity needs no such
+    # assumption.
     distances.fill_diagonal_(torch.inf)
     return distances.argmin(dim=1)
 
@@ -166,13 +177,16 @@ def _cluster_means(
     Returns:
         ``(num_clusters, D)`` tensor of centroids.
     """
-    # DIVERGENCE: the reference's ``cool_mean`` implements exclusion by writing
-    # zeros into the caller's feature matrix in place — corrupting every later
-    # level, which reads the same matrix — and then subtracts exactly one from
-    # *every* cluster's count regardless of how many members were masked, which
-    # is wrong for THRESHOLD and PROPORTION and divides by zero for a singleton
-    # cluster under FARTHEST. Excluding by mask leaves the input untouched and
-    # divides by the true retained count.
+    # DIVERGENCE: masked rows are dropped with a mask, and each cluster is
+    # divided by the number of rows it actually kept. Two reasons.
+    #
+    # The reference's ``cool_mean`` instead (1) writes zeros into the feature
+    # matrix it was handed, which corrupts every later level, since they all
+    # read that same matrix; and (2) subtracts exactly one from *every*
+    # cluster's count, however many members were masked. That divisor is right
+    # only under FARTHEST, which masks one member per cluster. Under THRESHOLD a
+    # cluster with no outlier at all still loses a count, and under PROPORTION
+    # roughly half the members are dropped while the divisor falls by one.
     kept_features = features if excluded is None else features[~excluded]
     kept_assignment = assignment if excluded is None else assignment[~excluded]
 
@@ -205,6 +219,13 @@ def _outlier_mask(
     Vectorized over all clusters at once. The reference walks every member of
     every cluster in a Python loop calling ``scipy.spatial.distance.euclidean``,
     which is the dominant cost of its training step.
+
+    DIVERGENCE: which points count as a cluster's members. They are read from
+    ``assignment``, so every level masks its own members. The reference builds
+    that map once, from level 0, and never rebuilds it: above level 0 it
+    measures a coarse centroid against the members of whichever *level-0*
+    cluster happens to carry the same id. Those are unrelated groups, so the
+    points it masks up there are effectively arbitrary.
 
     A cluster is never emptied: clusters of fewer than two members are exempt,
     and PROPORTION always retains at least one member.
@@ -375,8 +396,11 @@ def finch(
     parents: list[torch.Tensor] = []
 
     while len(assignments) < max_levels and num_clusters >= _MIN_POINTS_TO_CLUSTER:
-        # Cluster the current level's centroids; the resulting labelling is
-        # exactly the level-to-level parent map, so no search is needed later.
+        # DIVERGENCE: the parent map is kept, not searched for later. Clustering
+        # this level's centroids already says which cluster each one lands in,
+        # which is the map itself. The reference throws it away and recovers a
+        # parent on demand by scanning the whole label matrix for the first row
+        # carrying that cluster id — once per anchor per candidate prototype.
         parent_map, next_num_clusters = _weak_connected_components(_one_nn_neighbors(centroids[-1]))
         # The reference's stopping rule: a level that collapses to one cluster,
         # or that merges at most one pair, carries no new structure.

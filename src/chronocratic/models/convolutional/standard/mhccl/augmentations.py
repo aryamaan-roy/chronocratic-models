@@ -46,24 +46,34 @@ def _default_mhccl_pair() -> AugmentationProducer[ViewPair]:
     scaling (weak) and whose second applies segment permutation followed by
     jitter (strong).
 
-    One deliberate divergence, commented at its line: the scale factor is drawn
-    per sample rather than once per batch.
+    Two divergences from the reference, each marked ``DIVERGENCE`` at the line
+    where it happens: the scale factor varies across channels rather than along
+    time, and permuted segments keep each channel's own values.
 
     Returns:
         A producer that returns :class:`ViewPair` instances when
         :meth:`~AugmentationProducer.produce` is called.
     """
     return RolePairProducer(
-        # DIVERGENCE: ``per_sample=True``. The reference draws one scale factor
-        # and applies it to every sample, which is sound there because it
-        # augments the whole training set once, offline, so the factor still
-        # varies across the corpus. Under this library's per-batch producer
-        # contract a literal port would redraw one factor per batch and apply it
-        # uniformly within that batch — a constant rescale that supplies no
-        # per-sample variation for the contrastive terms to exploit.
+        # DIVERGENCE: which axis the scale factor varies along. Here one factor
+        # is drawn per (sample, channel) and held fixed over time, which is what
+        # scaling means everywhere else in this library.
+        #
+        # The reference draws one per (sample, timestep) instead, and gives
+        # every channel the same one. A factor that changes at each timestep is
+        # not a rescaling at all — it is multiplicative noise, which the strong
+        # view's ``Jitter`` already supplies. Note that both draw per sample;
+        # only the second axis differs.
         first=Scaling(ScalingParameters(sigma=1.1, mean=2.0, per_sample=True, channel_dim=-1)),
         second=ComposeAugmentation(
             [
+                # DIVERGENCE: all channels are shuffled together, each keeping
+                # its own values. The reference assigns ``pat[0, warp]`` into a
+                # ``(C, T)`` row, and numpy broadcasts that one row over every
+                # channel: channel 0's shuffled values are copied across, and
+                # the other channels' data is thrown away. Harmless in TS-TCC,
+                # where it comes from, because those datasets have one channel;
+                # not harmless on the multivariate ones MHCCL reports.
                 Permutation(PermutationParameters(max_segments=8, time_dim=1)),
                 Jitter(JitterParameters(sigma=0.8)),
             ]

@@ -14,7 +14,10 @@ removed from the negatives and supplemented into the positives.
 
 Selection is vectorized over the batch and stays on the input's device. The
 reference builds both sets with per-anchor Python loops over every cluster, which
-dominates its training step.
+dominates its training step. Selecting the same sets faster is not a divergence;
+the two that are, both marked ``DIVERGENCE`` at the line where they happen, are
+that logits are inner products (marked in each term) and that candidate slots a
+batch cannot fill are masked out of the loss rather than raising.
 """
 
 from __future__ import annotations
@@ -44,6 +47,11 @@ class ContrastTerms:
             fill — a row with fewer candidates than requested — which the loss
             excludes rather than padding with a duplicate that would then carry
             double weight.
+
+            DIVERGENCE: this mask has no counterpart in the reference, which
+            draws its negatives with ``random.sample`` and simply raises when
+            the batch holds fewer than it asked for. Positives are padded with
+            the anchor itself in both.
     """
 
     logits: torch.Tensor
@@ -132,17 +140,22 @@ def instance_contrast_terms(
     positive_first = torch.where(is_self.unsqueeze(-1), key[positive_index], query[positive_index])
     positive_views = _interleave_views(positive_first, key[positive_index])
 
-    # DIVERGENCE: negatives are every instance outside the anchor's cluster. The
-    # reference excludes only the positives it happened to sample, so when a
-    # cluster holds more members than ``positive_count`` the unsampled ones
-    # become negatives of an anchor they share a cluster with — the fake
-    # negatives the model exists to remove.
+    # Negatives are every instance outside the anchor's cluster, as in the
+    # reference: it forms ``negid`` from the batch minus the *whole* cluster and
+    # only then subsamples the positives, so members it did not sample as
+    # positives never reappear as negatives.
     negative_index, negative_available = _sample_from_mask(
         candidates=~same_cluster, count=negative_count
     )
     negative_views = _interleave_views(query[negative_index], key[negative_index])
 
     candidates = torch.cat([positive_views, negative_views], dim=1)
+    # DIVERGENCE: each logit is the inner product of the anchor with one
+    # candidate. The reference wants the same thing, but gets there by calling
+    # ``torch.reshape`` on its ``(B, M, D)`` stack to make it ``(B, D, M)``,
+    # where its own comment asks for a transpose. Reshape reinterprets the
+    # buffer instead of moving axes, so the einsum that follows multiplies
+    # values that do not belong together.
     logits = torch.einsum("bd,bmd->bm", query, candidates)
 
     targets = torch.zeros_like(logits)
@@ -206,6 +219,9 @@ def prototype_contrast_terms(
     )
 
     candidates = torch.cat([centroids[positive_index], centroids[negative_index]], dim=1)
+    # DIVERGENCE: inner products, for the reason given in
+    # :func:`instance_contrast_terms` — the reference reshapes where it means to
+    # transpose here too.
     logits = torch.einsum("bd,bmd->bm", query, candidates)
 
     targets = torch.zeros_like(logits)

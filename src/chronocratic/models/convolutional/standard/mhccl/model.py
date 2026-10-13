@@ -133,8 +133,13 @@ class MHCCL(pl.LightningModule, BasicEncodingMixin):
     from ``chronocratic.models.supervised``.
 
     This model was implemented based on the code available on this GitHub repo
-    https://github.com/mqwfrog/MHCCL, the reference for MHCCL. Deliberate
-    divergences from it:
+    https://github.com/mqwfrog/MHCCL, the reference for MHCCL. There are sixteen
+    deliberate divergences from it, listed below. The ten that happen at a
+    particular line of code are marked ``DIVERGENCE`` at that line; the other
+    six are structural, being things the reference does that this port does not
+    do anywhere.
+
+    In this module, both marked:
 
     - **Clustering runs per batch over a momentum feature bank.** The reference
       clusters the training set once per epoch and addresses the result through
@@ -143,44 +148,86 @@ class MHCCL(pl.LightningModule, BasicEncodingMixin):
       augmented embeddings — the same stacking, and the leading ``B`` rows are
       the anchors — unioned with a FIFO of recent momentum embeddings that
       restores the sample count a multi-level hierarchy needs. Prototypes are
-      therefore re-derived every step rather than fixed per epoch.
-    - **The feature bank is capped at one epoch of rows.** ``feature_bank_size``
-      is a ceiling; the data sets the size below it. Retaining more would fill
-      the pool with copies of the same samples from different encoder states.
-    - **The realized hierarchy depth is reported, not assumed.** Each contrasted
-      partition needs the one above it for downward masking, so
-      ``min(hierarchy_levels, levels - 1)`` are used, logged as
-      ``mhccl/hierarchy_levels_used``, and a shortfall warns once. The
-      cluster-level term averages over the levels used; the reference divides by
-      the configured count, which ties the loss scale to the batch's geometry.
+      therefore re-derived every step rather than fixed per epoch. That FIFO is
+      capped at one epoch of rows, whatever ``feature_bank_size`` allows, since
+      holding more would fill the pool with copies of the same samples taken
+      from different encoder states; it starts empty, where the reference's own
+      (commented-out) queue would have started at random unit vectors.
+    - **Cluster-level contrast averages over the partitions actually realized.**
+      The reference divides by the configured count instead, which ties the loss
+      scale to how the batch happened to cluster. Each contrasted partition
+      needs the one above it for downward masking, so ``min(hierarchy_levels,
+      levels - 1)`` are used, logged as ``mhccl/hierarchy_levels_used``, and a
+      shortfall warns once.
+
+    In :mod:`~chronocratic.models.convolutional.standard.mhccl.losses`, both
+    marked:
+
     - **Logits are inner products.** The reference reshapes its ``(B, M, D)``
       candidate stack to ``(B, D, M)`` where the comment above the line asks for
       a transpose, so its einsum contracts mismatched elements. Computed here
-      with ``einsum("bd,bmd->bm", ...)``.
-    - **Negatives are everything outside the anchor's cluster.** The reference
-      excludes only the positives it sampled, leaving a large cluster's
-      unsampled members as negatives of an anchor they share a cluster with.
-    - **Shortfalls are masked, not raised.** The reference draws a fixed count
-      and raises when a batch holds fewer candidates. Unfillable slots are
-      excluded from the mean, which equals ``reduction="mean"`` when none are.
+      with ``einsum("bd,bmd->bm", ...)``, in both contrastive terms.
+    - **Negative shortfalls are masked, not raised.** The reference draws a
+      fixed count with ``random.sample`` and raises when the batch holds fewer
+      negatives than requested. Unfillable slots are excluded from the mean,
+      which equals ``reduction="mean"`` when none are. Short *positive* sets are
+      padded with the anchor itself, as the reference does.
+
+    In :mod:`~chronocratic.models.convolutional.standard.mhccl.clustering`, four
+    marked and one structural:
+
+    - **Self-distances are infinite**, where the reference uses ``1e12`` — large
+      enough only because its features are unit-norm.
+    - **Centroids never mutate the feature matrix** and divide by true
+      per-cluster counts, where the reference zeroes masked rows in place and
+      subtracts a constant one from every cluster.
+    - **Outlier masking reads each level's own cluster membership**, where the
+      reference reuses the level-0 member lists at every coarser level.
+    - **The level-to-level parent map is kept** from the merge step rather than
+      recovered by scanning the label matrix per anchor per candidate.
+    - **The reference's ``min_sim`` edge pruning is omitted** (structural). It
+      is a no-op there: it zeroes stored entries of a ``csr_matrix``, and
+      ``csgraph`` reads only the sparsity structure, which that does not change.
+
+    In :mod:`~chronocratic.models.convolutional.standard.mhccl.augmentations`,
+    both marked:
+
+    - **The scale factor varies across channels, not along time.** The
+      reference's varies along time and is shared across channels, which makes
+      it multiplicative noise rather than a rescaling.
+    - **Permutation keeps every channel's own values.** The reference broadcasts
+      channel 0's shuffled values over every channel, discarding the rest.
+
+    Structural, with no single line to mark:
+
     - **No shuffle-BN and no ``torch.distributed``.** Batch shuffling is the
       identity at world size 1 and unnecessary under the ``GroupNorm`` default,
       which computes no batch statistics.
-    - **Centroids never mutate the feature matrix** and divide by true
-      per-cluster counts. See
-      :mod:`~chronocratic.models.convolutional.standard.mhccl.clustering`.
     - **1-D convolutions.** The reference applies a torchvision ResNet-18 as
-      ``Conv2d`` over an input unsqueezed to ``(B, C, T, 1)``, where the outer
-      kernel columns only multiply zero padding. Numerically identical; see
-      :class:`Conv1dResNetEncoder`.
+      ``Conv2d`` over an input unsqueezed to ``(B, C, T, 1)``. That trailing
+      axis stays degenerate through the ``3x3`` residual convolutions, which is
+      the equivalence the shared encoder rests on, but not through this model's
+      stem: ``kernel_size=8, padding=4`` widens it to 2 — to 80 on the
+      ``epilepsy`` setting, which pads by 43 — the first stage then mixes those
+      columns across a ReLU, and only the second stage's stride collapses it.
+      The extra columns are the same signal under different slices of the stem
+      kernel: an artifact of reusing a vision backbone, not a modelling choice,
+      and not something the paper describes. Unlike the other ports sharing
+      :class:`Conv1dResNetEncoder`, this one is therefore a simplification of
+      the reference rather than a rewriting of it.
     - **Normalization defaults to ``GroupNorm(1, C)``** rather than the
       reference's ``BatchNorm``, so the encoder stays well-defined at
       ``batch_size=1``. ``normalization_layer_type=BATCH`` restores it.
     - **Views come from the injected producer, per batch.** The reference
       freezes both views at ``Dataset`` construction and never seeds
-      ``np.random``, so they are not reproducible across runs.
-    - **Defaults follow the README's published command** where it and the CLI
-      disagree — ``use_projection_mlp`` and ``use_lr_scheduler``.
+      ``np.random``, so they are fixed for the whole run and not reproducible
+      across runs.
+    - **Defaults follow the CLI, with two exceptions.** ``use_projection_mlp``
+      and ``use_lr_scheduler`` take the README command's ``--mlp`` and ``--cos``,
+      because the CLI defaults would ship no projection head and no decay at
+      all. The README's other departures from the CLI — ``--protoNCE_only``, the
+      three masking flags, ``--mask_mode mask_proportion``, ``--posi 2
+      --negi 100`` — are ablation switches, and the CLI default wins there.
 
     Args:
         input_dim: Number of input features (channels) in the time series.
@@ -375,10 +422,13 @@ class MHCCL(pl.LightningModule, BasicEncodingMixin):
         self.feature_bank_index: torch.Tensor
         self.rows_this_epoch: torch.Tensor
         self.rows_last_epoch: torch.Tensor
-        # DIVERGENCE: the bank starts empty rather than randomly initialized as
-        # CoST's queue does. Random unit vectors would form spurious clusters
-        # that real samples get assigned to; an empty bank simply degrades the
-        # first steps to batch-only clustering.
+        # The bank has no counterpart in the reference — its own ``queue`` is
+        # commented out — so nothing here diverges; the bank itself is the
+        # divergence, documented in the class docstring. It starts empty rather
+        # than randomly initialized the way MoCo's queue (and that dead code) is:
+        # random unit vectors would form spurious clusters that real samples get
+        # assigned to, where an empty bank simply degrades the first steps to
+        # batch-only clustering.
         self.register_buffer("feature_bank", torch.zeros(max(feature_bank_size, 1), projection_dim))
         self.register_buffer("feature_bank_fill", torch.zeros((), dtype=torch.long))
         self.register_buffer("feature_bank_index", torch.zeros((), dtype=torch.long))
@@ -541,6 +591,12 @@ class MHCCL(pl.LightningModule, BasicEncodingMixin):
             # Blocks are [raw | first view | second view]; the key branch's
             # contribution to the loss is the second view's block.
             key = stacked[(_VIEWS_PER_SAMPLE - 1) * batch_size :]
+            # DIVERGENCE: what gets clustered. The reference clusters the whole
+            # training set once per epoch and looks each sample's cluster up by
+            # its dataset index, which this library's batch contract does not
+            # carry. Clustered here instead: the same three blocks, for this
+            # batch only, plus a FIFO of recent momentum rows to restore the
+            # sample count a multi-level hierarchy needs.
             pool = torch.cat([stacked, self._bank_rows()], dim=0)
 
         hierarchy = self._cluster(pool)
@@ -627,10 +683,12 @@ class MHCCL(pl.LightningModule, BasicEncodingMixin):
             )
         if usable == 0:
             return total, usable
-        # DIVERGENCE: averaged over the levels actually used, not over
-        # ``hierarchy_levels``. Dividing by the configured count would shrink the
-        # loss whenever the hierarchy is shallow, tying the objective's scale to
-        # the batch's geometry.
+        # DIVERGENCE: the divisor is the number of levels actually summed above,
+        # not the configured ``hierarchy_levels``. The reference divides by the
+        # configured count whatever the clustering produced, so a batch whose
+        # hierarchy came out shallow contributes a smaller loss for that reason
+        # alone — the objective's scale would depend on how the batch happened
+        # to cluster.
         return total / usable, usable
 
     def _cluster(self, pool: torch.Tensor) -> "ClusterHierarchy":

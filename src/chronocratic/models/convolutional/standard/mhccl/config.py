@@ -30,10 +30,14 @@ class MHCCLModelParameters:
 
     Defaults are sourced from the reference implementation's code, not from the
     MHCCL paper: ``main.py``'s argparse for the training and contrast settings,
-    and ``framework.py``'s ``ResNet18`` for the architecture. Where the CLI
-    default and the README's published command disagree, the published command
-    wins, since it is the only complete configuration the authors give;
-    ``use_projection_mlp`` and ``use_lr_scheduler`` are the two such fields.
+    and ``framework.py``'s ``ResNet18`` for the architecture. The README's
+    published command overrides many of those defaults; two of its overrides are
+    taken here — ``use_projection_mlp`` (``--mlp``) and ``use_lr_scheduler``
+    (``--cos``) — because the CLI defaults would otherwise ship no projection
+    head and no learning-rate decay at all. Its remaining overrides
+    (``--protoNCE_only``, the masking flags, ``--mask_mode``, ``--posi``,
+    ``--negi``) select an ablation rather than a baseline, so the CLI default
+    stands for those.
 
     Args:
         input_dim: Number of input features (channels) in the time series.
