@@ -15,6 +15,7 @@ from chronocratic.models import (
     AutoTCL,
     CoST,
     MCL,
+    MHCCL,
     RecurrentAutoEncoder,
     Series2Vec,
     SimCLR,
@@ -121,6 +122,19 @@ def _mcl(dm: SyntheticClassificationDataModule) -> pl.LightningModule:
         representation_dim=32,
         encoder_channels=(16, 32, 16),
         projection_dim=16,
+    )
+
+
+def _mhccl(dm: SyntheticClassificationDataModule) -> pl.LightningModule:
+    return MHCCL(
+        input_dim=dm.num_features,
+        stem_conv_channels=8,
+        encoder_stage_channels=(8, 16),
+        encoder_stage_depths=(1, 1),
+        encoder_stage_strides=(1, 2),
+        projection_hidden_dim=32,
+        projection_dim=16,
+        use_lr_scheduler=False,
     )
 
 
@@ -243,6 +257,13 @@ MODEL_SPECS: tuple[ModelSpec, ...] = (
         task=Task.CONTRASTIVE,
         build=_mcl,
         make_datamodule=_classification(loader_mode=LoaderMode.SAMPLE),
+    ),
+    ModelSpec(
+        name="mhccl",
+        model_class=MHCCL,
+        task=Task.CONTRASTIVE,
+        build=_mhccl,
+        make_datamodule=_classification(loader_mode=LoaderMode.SAMPLE_LABEL),
     ),
     ModelSpec(
         name="series2vec",
