@@ -4,7 +4,6 @@ import itertools
 from typing import cast
 
 import lightning.pytorch as pl
-import numpy as np
 import torch
 from torch import fft, nn
 import torch.nn.functional as F  # noqa: N812
@@ -40,7 +39,9 @@ class CoST(pl.LightningModule, DecompositionEncodingMixin):
         depth: Number of encoder layers.
         dropout_rate: Dropout probability applied after each encoder layer.
         conv_kernel_size: Convolutional kernel size in the dilated encoder.
-        mask_mode: Strategy for masking input tokens during training.
+        mask_mode: Stored on the encoders but not applied in training: the encoder
+            ``forward`` defaults to ``ALL_TRUE``, as upstream CoST does, so no mask is
+            drawn. Kept for parity with the upstream constructor.
         learning_rate: Base learning rate for the optimizer.
         seasonal_loss_weight: Weight for the seasonal contrastive loss term.
         queue_size: Size of the memory queue for contrastive learning.
@@ -101,10 +102,6 @@ class CoST(pl.LightningModule, DecompositionEncodingMixin):
             self._augmentation = augmentation
 
         self.automatic_optimization = False
-
-        # Seeded RNG for reproducible temporal index selection.
-        # Deferred until on_fit_start() or first use so it picks up the seed
-        # set by the trainer (see _ensure_rng).
 
         length = min(max_train_length, sequence_length)
 
@@ -179,19 +176,10 @@ class CoST(pl.LightningModule, DecompositionEncodingMixin):
         """
         return self._representation_dim
 
-    def on_fit_start(self) -> None:
-        """Initialize the numpy RNG after the trainer has set the PyTorch seed."""
-        self._ensure_rng()
-
     @property
     def encoder(self) -> nn.Module:
         """Return the query encoder for inspection and checkpointing."""
         return self.query_encoder
-
-    def _ensure_rng(self) -> None:
-        """Lazily create the numpy RNG if it has not been initialized yet."""
-        if not hasattr(self, "_rng"):
-            self._rng = np.random.default_rng(seed=int(torch.random.initial_seed()))
 
     def configure_optimizers(self) -> SGD:
         """Return SGD optimizer over trainable query encoder and projection head parameters."""
@@ -272,8 +260,8 @@ class CoST(pl.LightningModule, DecompositionEncodingMixin):
         self, query: torch.Tensor, key: torch.Tensor, *, update_key_encoder: bool = True
     ) -> torch.Tensor:
         # compute query features
-        self._ensure_rng()
-        random_index = self._rng.integers(0, query.shape[1])
+        # Global torch CPU generator, so ``seed_everything`` makes it repeatable.
+        random_index = int(torch.randint(low=0, high=query.shape[1], size=(1,)))
 
         query_trend, query_seasonality = self.query_encoder(query)
         if query_trend is not None:
