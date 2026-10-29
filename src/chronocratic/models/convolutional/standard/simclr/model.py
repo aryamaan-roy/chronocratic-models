@@ -11,7 +11,6 @@ from chronocratic.models._mixin import BasicEncodingMixin
 from chronocratic.models.convolutional.standard.encoders.resnet import Conv1dResNetEncoder
 from chronocratic.models.convolutional.standard.simclr.augmentations import _default_simclr_pair
 from chronocratic.models.convolutional.standard.simclr.config import _MIN_SINGLETON_SPLIT_COUNT
-from chronocratic.models.convolutional.standard.tstcc.model import _instance_normalize
 from chronocratic.models.enums.blocks import ResidualBlockType
 from chronocratic.models.enums.encoding import EncodingOutputShape
 from chronocratic.models.enums.layers import NormalizationLayerType
@@ -19,6 +18,7 @@ from chronocratic.models.losses import NTXentLoss
 from chronocratic.models.utils import (
     ensure_pairable_batch,
     extract_features_from_batch,
+    normalize_per_series,
     process_sample_length,
     zero_fill_padding,
 )
@@ -338,7 +338,7 @@ class SimCLR(pl.LightningModule, BasicEncodingMixin):
             data, split_count=self._singleton_split_count, min_window_len=self._conv_kernel_size
         )
         if self._instance_normalize:
-            data = _instance_normalize(data)
+            data = normalize_per_series(data)
 
         pair = self._augmentation.produce(data)
         return self.criterion(self(pair.first), self(pair.second))
@@ -504,7 +504,7 @@ class SimCLR(pl.LightningModule, BasicEncodingMixin):
         batch_x, _ = zero_fill_padding(batch_x)
         batch_x = batch_x.float()
         if self._instance_normalize:
-            batch_x = _instance_normalize(batch_x)
+            batch_x = normalize_per_series(batch_x)
         features = encoder(batch_x)  # (B, C, T')
         if output == EncodingOutputShape.VECTOR:
             return features.mean(dim=-1)  # (B, C) — VECTOR

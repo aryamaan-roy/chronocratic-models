@@ -26,7 +26,13 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from chronocratic.models._mixin import BasicEncodingMixin
 from chronocratic.models.augmentation.base import AugmentationProducer, ViewPair
-from chronocratic.models.augmentation.primitives import Jitter, JitterParameters, Permutation
+from chronocratic.models.augmentation.primitives import (
+    Jitter,
+    JitterParameters,
+    Permutation,
+    TimestepScaling,
+    TimestepScalingParameters,
+)
 from chronocratic.models.augmentation.producers import FullOverlapProducer, IndependentPairProducer
 from chronocratic.models.convolutional.standard.encoders.resnet import Conv1dResNetEncoder
 from chronocratic.models.convolutional.standard.layers.residual import (
@@ -37,17 +43,12 @@ from chronocratic.models.convolutional.standard.simclr import model as simclr_mo
 from chronocratic.models.convolutional.standard.simclr.augmentations import _default_simclr_pair
 from chronocratic.models.convolutional.standard.simclr.config import SimCLRModelParameters
 from chronocratic.models.convolutional.standard.simclr.model import SimCLR
-from chronocratic.models.convolutional.standard.tstcc.augmentations import (
-    TSTCCScaling,
-    TSTCCScalingParameters,
-)
-from chronocratic.models.convolutional.standard.tstcc.model import _instance_normalize
 from chronocratic.models.enums.blocks import ResidualBlockType
 from chronocratic.models.enums.encoding import EncodingOutputShape
 from chronocratic.models.enums.layers import NormalizationLayerType
 from chronocratic.models.losses import NTXentLoss
 from chronocratic.models.protocols import HasEncoder
-from chronocratic.models.utils import ensure_pairable_batch
+from chronocratic.models.utils import ensure_pairable_batch, normalize_per_series
 from chronocratic.models.utils.helpers import reset_warning_cache
 
 # Asymmetric on purpose: T=50, C=3.
@@ -654,8 +655,8 @@ class TestAugmentation:
     def test_default_pair_has_no_permutation(self) -> None:
         """Permutation makes the per-timestep loss discard position (#99)."""
         producer = _default_simclr_pair()
-        assert isinstance(producer._first, TSTCCScaling)
-        assert producer._first._params == TSTCCScalingParameters()
+        assert isinstance(producer._first, TimestepScaling)
+        assert producer._first._params == TimestepScalingParameters()
         assert isinstance(producer._second, Jitter)
         assert producer._second._params.sigma == pytest.approx(0.8)
 
@@ -691,9 +692,9 @@ class TestInstanceNormalize:
 
         def recording_normalize(x: torch.Tensor) -> torch.Tensor:
             calls.append(x)
-            return _instance_normalize(x)
+            return normalize_per_series(x)
 
-        monkeypatch.setattr(simclr_model, "_instance_normalize", recording_normalize)
+        monkeypatch.setattr(simclr_model, "normalize_per_series", recording_normalize)
         model = _small_model(instance_normalize=instance_normalize)
         model._compute_loss(_data())
         assert len(calls) == int(instance_normalize)
@@ -706,7 +707,7 @@ class TestInstanceNormalize:
         x = _data()
         with torch.no_grad():
             encoded = model._encode_batch(model.encoder, x * 10.0 + 3.0)
-            reference_input = _instance_normalize(x) if instance_normalize else x * 10.0 + 3.0
+            reference_input = normalize_per_series(x) if instance_normalize else x * 10.0 + 3.0
             reference = model.encoder(reference_input).mean(dim=-1)
         assert torch.allclose(encoded, reference, atol=1e-5)
 
